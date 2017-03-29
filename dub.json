@@ -1,0 +1,16 @@
+{
+	"name": "gameyaml",
+	"authors": [
+		"Cameron \"Herringway\" Ross"
+	],
+	"description": "Library for manipulating game.yml files",
+	"copyright": "Copyright © 2016, Cameron \"Herringway\" Ross",
+	"license": "BSL-1.0",
+	"subPackages": [
+		"yamlvalidator"
+	],
+	"dependencies": {
+		"wyaml": "~>0.6.0",
+		"libdmathexpr": "~>1.0.0"
+	}
+}

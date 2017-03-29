@@ -1,0 +1,9 @@
+{
+	"name": "yamlvalidator",
+	"description": "A minimal D application.",
+	"copyright": "Copyright © 2014, Cameron",
+	"authors": ["Cameron"],
+	"dependencies": {
+		"gameyaml": "*"
+	}
+}
