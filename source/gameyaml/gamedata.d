@@ -22,7 +22,56 @@ import std.typecons;
 import std.uni;
 import std.variant;
 
-import wyaml;
+version(Have_dyaml_yamlserialized) {
+	import dyaml.all;
+	auto readAs(T)(Node node) {
+		return node.as!T;
+	}
+	alias asString = readAs!string;
+	struct Tag {
+		string str;
+		alias str this;
+	}
+	auto addConstructorMapping_(alias func)(Constructor constructor, Tag tag) {
+		constructor.addConstructorMapping(tag, &func);
+	}
+	auto dumpStr(Node data) {
+		import dyaml.stream;
+		auto stream = new YMemoryStream();
+		auto node = Node([1, 2, 3, 4, 5]);
+		Dumper(stream).dump(node);
+		return cast(string)stream.data;
+	}
+	auto loadFromFile(string file) {
+		return Loader(file);
+	}
+	auto loadFromString(string str) {
+		return Loader.fromString(str.dup);
+	}
+} else version(Have_wyaml) {
+	import wyaml;
+	auto readAs(T)(Node node) {
+		return cast(T)node;
+	}
+	auto asString(Node node) {
+		return node.toString;
+	}
+	auto addConstructorMapping_(alias func)(Constructor constructor, Tag tag) {
+		constructor.addConstructorMapping!func(tag);
+	}
+	auto dumpStr(Node data) {
+		auto buf = new OutBuffer();
+		auto dumper = Dumper();
+		dumper.dump(buf, data);
+		return buf.text;
+	}
+	auto loadFromFile(string file) {
+		return Loader(cast(string)file.read());
+	}
+	auto loadFromString(string str) {
+		return Loader(str.dup);
+	}
+}
 import libdmathexpr.mathexpr;
 
 /++
@@ -357,7 +406,7 @@ private enum YAML10Types {
 private GameStruct constructOldBlock(ref Node node) {
 	GameStruct block;
 	if ("Type" in node) {
-		final switch (cast(YAML10Types)node["Type"]) {
+		final switch (node["Type"].readAs!YAML10Types) {
 			case YAML10Types.int_ ,YAML10Types.hexint:
 				block = constructIntBlock(node);
 				break;
@@ -421,7 +470,7 @@ GameStruct constructBlock(EntryType type)(ref Node node) {
 	auto output = GameStruct();
 	output.type = type;
 	if ("Name" in node) {
-		output.name = node["Name"].toString;
+		output.name = node["Name"].asString;
 		output.entryProblems ~= GameStructIssue("Name key found", "Use name in block key instead");
 		node.removeAt("Name");
 	}
@@ -435,7 +484,7 @@ GameStruct constructBlock(EntryType type)(ref Node node) {
 	deprecatedKey(node, output, "Base");
 	deprecatedKey(node, output, "Locals", "localvars");
 	if ("Pretty Name" in node) {
-		output.prettyName = node["Pretty Name"].toString;
+		output.prettyName = node["Pretty Name"].asString;
 		node.removeAt("Pretty Name");
 	}
 	if ("Arguments" in node) {
@@ -472,21 +521,21 @@ GameStruct constructBlock(EntryType type)(ref Node node) {
 	}
 	if ("Signed" in node) {
 		if ((type == EntryType.pointer) || (type == EntryType.integer)) {
-			output.isSigned = (cast(bool)node["Signed"]).ifThrown(node["Signed"].toString == "y");
+			output.isSigned = (node["Signed"].readAs!bool).ifThrown(node["Signed"].asString == "y");
 		} else {
 			output.entryProblems ~= GameStructIssue("Signed is meaningless in this context", "remove");
 		}
 		node.removeAt("Signed");
 	}
 	if ("References" in node) {
-		output.references = node["References"].toString;
+		output.references = node["References"].asString;
 		node.removeAt("References");
 	}
 	if ("Base" in node) {
 		if (type == EntryType.pointer) {
-			output.pointerBase = cast(ulong)node["Base"];
+			output.pointerBase = node["Base"].readAs!ulong;
 		} else if (type == EntryType.integer) {
-			output.numberBase = cast(ubyte)node["Base"];
+			output.numberBase = node["Base"].readAs!ubyte;
 		} else {
 			output.entryProblems ~= GameStructIssue("Base is meaningless in this context", "remove");
 		}
@@ -496,34 +545,34 @@ GameStruct constructBlock(EntryType type)(ref Node node) {
 		node.removeAt("Type");
 	}
 	if ("Offset" in node) {
-		output.address = cast(ulong)node["Offset"];
+		output.address = node["Offset"].readAs!ulong;
 		node.removeAt("Offset");
 	}
 	if ("Size" in node) {
-		output.size = cast(typeof(output.size))node["Size"];
+		output.size = node["Size"].readAs!(typeof(output.size));
 		node.removeAt("Size");
 	}
 	if ((type == EntryType.pointer) && (output.realSize > 8)) {
 		output.entryProblems ~= GameStructIssue("Pointer size impossible", "change");
 	}
 	if ("Description" in node) {
-		output.description = node["Description"].toString;
+		output.description = node["Description"].asString;
 		node.removeAt("Description");
 	}
 	if ("Format" in node) {
-		output.format = node["Format"].toString;
+		output.format = node["Format"].asString;
 		node.removeAt("Format");
 	}
 	if ("Notes" in node) {
-		output.notes = node["Notes"].toString;
+		output.notes = node["Notes"].asString;
 		node.removeAt("Notes");
 	}
 	if ("Charset" in node) {
-		output.charSet = node["Charset"].toString;
+		output.charSet = node["Charset"].asString;
 		node.removeAt("Charset");
 	}
 	if ("Endianness" in node) {
-		output.endianness = node["Endianness"].toString == "Little" ? Endian.littleEndian : Endian.bigEndian;
+		output.endianness = node["Endianness"].asString == "Little" ? Endian.littleEndian : Endian.bigEndian;
 		node.removeAt("Endianness");
 	}
 	if ("Terminator" in node) {
@@ -532,7 +581,7 @@ GameStruct constructBlock(EntryType type)(ref Node node) {
 				output.terminator ~= value;
 			}
 		} else {
-			output.terminator = [cast(ubyte)node["Terminator"]];
+			output.terminator = [node["Terminator"].readAs!ubyte];
 		}
 		node.removeAt("Terminator");
 	}
@@ -554,13 +603,13 @@ GameStruct constructBlock(EntryType type)(ref Node node) {
 		if (type == EntryType.struct_) {
 			try {
 				foreach (string name, Node subnode; node["Entries"]) {
-					GameStruct gamestruct = (cast(GameStruct)subnode).ifThrown(constructOldBlock(subnode));
+					GameStruct gamestruct = (readAs!GameStruct(subnode)).ifThrown(constructOldBlock(subnode));
 					gamestruct.name = name;
 					output.subEntries ~= gamestruct;
 				}
 			} catch (YAMLException) {
 				foreach (Node subnode; node["Entries"]) {
-					GameStruct gamestruct = (cast(GameStruct)subnode).ifThrown(constructOldBlock(subnode));
+					GameStruct gamestruct = (readAs!GameStruct(subnode)).ifThrown(constructOldBlock(subnode));
 					output.subEntries ~= gamestruct;
 				}
 			}
@@ -583,7 +632,7 @@ GameStruct constructBlock(EntryType type)(ref Node node) {
 
 	if ("Item Type" in node) {
 		if (type == EntryType.array) {
-			output.itemType = (cast(GameStruct)node["Item Type"]).ifThrown(constructOldBlock(node["Item Type"]));
+			output.itemType = (node["Item Type"].readAs!GameStruct).ifThrown(constructOldBlock(node["Item Type"]));
 			if (!output.itemType.address.isNull()) {
 				output.entryProblems ~= GameStructIssue("Array prototype contains offset", "remove");
 			}
@@ -641,7 +690,7 @@ GameStruct constructBlock(EntryType type)(ref Node node) {
 + path = Absolute or relative path to game.yml file.
 +/
 GameData loadGameFile(string path) {
-	return loadCommon(Loader(cast(string)path.read()));
+	return loadCommon(loadFromFile(path));
 }
 /++
 + Loads game.yml data from a pre-existing string.
@@ -649,7 +698,7 @@ GameData loadGameFile(string path) {
 + data = Game.yml data.
 +/
 GameData loadGameFromString(string data) {
-	return loadCommon(Loader(data.dup));
+	return loadCommon(loadFromString(data));
 }
 /++
 + Common code for loading game.yml data.
@@ -660,13 +709,13 @@ private GameData loadCommon(Loader loader) {
 		ScriptTable recurseSubEntriesLength(Node val) {
 			auto output = ScriptTable();
 			if (val.isScalar()) {
-				output.length = val.toString;
+				output.length = val.asString;
 			} else {
 				foreach (Node key, Node value; val) {
 					if ((key == "default") || (key == "=")) {
-						output.length = value.toString;
+						output.length = value.asString;
 					} else {
-						output.subtables[cast(ubyte)key] = recurseSubEntriesLength(value);
+						output.subtables[key.readAs!ubyte] = recurseSubEntriesLength(value);
 					}
 				}
 			}
@@ -675,10 +724,10 @@ private GameData loadCommon(Loader loader) {
 		void recurseSubEntriesReplacements(Node val, ref ScriptTable[ubyte] output) {
 			foreach (Node key, Node value; val) {
 				if (value.isScalar()) {
-					if (cast(ubyte)key !in output) {
-						output[cast(ubyte)key] = ScriptTable();
+					if (key.readAs!ubyte !in output) {
+						output[key.readAs!ubyte] = ScriptTable();
 					}
-					output[cast(ubyte)key].stringReplacement = value.toString;
+					output[key.readAs!ubyte].stringReplacement = value.asString;
 				}
 			}
 		}
@@ -687,7 +736,7 @@ private GameData loadCommon(Loader loader) {
 				if (key == "=") {
 					continue;
 				}
-				output[cast(ubyte)key] = recurseSubEntriesLength(value);
+				output[key.readAs!ubyte] = recurseSubEntriesLength(value);
 			}
 		}
 		if ("Replacements" in input) {
@@ -696,19 +745,19 @@ private GameData loadCommon(Loader loader) {
 		return output;
 	}
 	auto constructor = new Constructor;
-	constructor.addConstructorMapping!constructAssemblyBlock(Tag("!assembly"));
-	constructor.addConstructorMapping!constructDataBlock(Tag("!data"));
-	constructor.addConstructorMapping!constructEmptyBlock(Tag("!empty"));
-	constructor.addConstructorMapping!constructStructBlock(Tag("!struct"));
-	constructor.addConstructorMapping!constructScriptBlock(Tag("!script"));
-	constructor.addConstructorMapping!constructIntBlock(Tag("!int"));
-	constructor.addConstructorMapping!constructArrayBlock(Tag("!array"));
-	constructor.addConstructorMapping!constructPointerBlock(Tag("!pointer"));
-	constructor.addConstructorMapping!constructBitfieldBlock(Tag("!bitfield"));
-	constructor.addConstructorMapping!constructUnknownBlock(Tag("!unknown"));
-	constructor.addConstructorMapping!constructUnknownBlock(Tag("!undefined"));
-	constructor.addConstructorMapping!constructTileBlock(Tag("!tile"));
-	constructor.addConstructorMapping!constructColorBlock(Tag("!color"));
+	constructor.addConstructorMapping_!constructAssemblyBlock(Tag("!assembly"));
+	constructor.addConstructorMapping_!constructDataBlock(Tag("!data"));
+	constructor.addConstructorMapping_!constructEmptyBlock(Tag("!empty"));
+	constructor.addConstructorMapping_!constructStructBlock(Tag("!struct"));
+	constructor.addConstructorMapping_!constructScriptBlock(Tag("!script"));
+	constructor.addConstructorMapping_!constructIntBlock(Tag("!int"));
+	constructor.addConstructorMapping_!constructArrayBlock(Tag("!array"));
+	constructor.addConstructorMapping_!constructPointerBlock(Tag("!pointer"));
+	constructor.addConstructorMapping_!constructBitfieldBlock(Tag("!bitfield"));
+	constructor.addConstructorMapping_!constructUnknownBlock(Tag("!unknown"));
+	constructor.addConstructorMapping_!constructUnknownBlock(Tag("!undefined"));
+	constructor.addConstructorMapping_!constructTileBlock(Tag("!tile"));
+	constructor.addConstructorMapping_!constructColorBlock(Tag("!color"));
 	loader.constructor = constructor;
 	auto document = loader.loadAll();
 	GameData output;
@@ -718,15 +767,15 @@ private GameData loadCommon(Loader loader) {
 	enforce(document[1].isValid, "Invalid YAML found in document 1");
 	enforce(document[0].isMapping, "Invalid format for game metadata");
 	enforce("Title" in document[0], "Missing title!");
-	output.title = document[0]["Title"].toString;
+	output.title = document[0]["Title"].asString;
 	enforce("Country" in document[0], "Missing Country!");
-	output.country = document[0]["Country"].toString;
+	output.country = document[0]["Country"].asString;
 	if ("Clean Hash" in document[0]) {
-		output.hash = document[0]["Clean Hash"].toString;
+		output.hash = document[0]["Clean Hash"].asString;
 		enforce(output.hash.length == 40, "Specified hash is not SHA1");
 	}
 	if ("Default Script" in document[0]) {
-		output.defaultScript = document[0]["Default Script"].toString;
+		output.defaultScript = document[0]["Default Script"].asString;
 	}
 	if (document[1].isMapping) {
 		ulong lastOffset = 0;
@@ -734,7 +783,7 @@ private GameData loadCommon(Loader loader) {
 		string lastName;
 		foreach (string name, Node node; document[1]) {
 			try {
-				GameStruct gamestruct = (cast(GameStruct)node).ifThrown(constructOldBlock(node));
+				GameStruct gamestruct = (readAs!GameStruct(node)).ifThrown(constructOldBlock(node));
 				gamestruct.name = name;
 				if (!gamestruct.address.isNull) {
 					if (gamestruct.address < lastOffset) {
@@ -1213,10 +1262,7 @@ Two: !assembly
 + Converts a YAML node to its string representation.
 +/
 string yamlString(Node data) {
-	auto buf = new OutBuffer();
-	auto dumper = Dumper();
-	dumper.dump(buf, data);
-	return buf.text;
+	return dumpStr(data);
 }
 
 /++

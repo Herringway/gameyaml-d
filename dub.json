@@ -10,7 +10,7 @@
 		"yamlvalidator"
 	],
 	"dependencies": {
-		"wyaml": "~>0.6.0",
+		"dyaml-yamlserialized": "~>0.6.0",
 		"libdmathexpr": "~>1.0.0"
 	}
 }
