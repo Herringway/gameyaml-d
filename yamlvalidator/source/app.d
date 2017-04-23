@@ -70,7 +70,14 @@ Problem[] testFile(string path, bool showAll) {
 		foreach (entry; data.addresses) {
 			if (auto allprobs = entry.problems) {
 				if (allprobs.length > 0) {
-					problems ~= Problem(entry.address, entry.name, allprobs.filter!((x) => showAll ? true : (x.level == IssueLevel.severe)).map!((x) => (x.toString)).array());
+					problems ~= Problem(
+						entry.address,
+						entry.name,
+						allprobs
+							.filter!((x) => showAll ? true : (x.level == IssueLevel.severe))
+							.map!((x) => (x.toString))
+							.array()
+					);
 				}
 			}
 		}
