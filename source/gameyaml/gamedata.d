@@ -180,6 +180,16 @@ struct ScriptTable {
 		return output;
 	}
 }
+unittest {
+	auto testScriptTable = ScriptTable();
+	testScriptTable.subtables[0] = ScriptTable();
+	testScriptTable.subtables[0].stringReplacement = "Hello";
+	assert(testScriptTable.replaceStr([0]).equal("Hello"));
+	assert(testScriptTable.replaceStr([0, 0]).equal("HelloHello"));
+
+	//NYI
+	//assert(testScriptTable.reverse("Hello") == [0]);
+}
 ///Types that can be stored in the game.yml address entries
 enum EntryType {
 	///Simple numbers
