@@ -22,8 +22,8 @@ import std.typecons;
 import std.uni;
 import std.variant;
 
-version(Have_dyaml_yamlserialized) {
-	import dyaml.all;
+version(Have_dyaml) {
+	import dyaml;
 	auto readAs(T)(Node node) {
 		return node.as!T;
 	}
