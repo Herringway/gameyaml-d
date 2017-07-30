@@ -22,55 +22,30 @@ import std.typecons;
 import std.uni;
 import std.variant;
 
-version(Have_dyaml) {
-	import dyaml;
-	auto readAs(T)(Node node) {
-		return node.as!T;
-	}
-	alias asString = readAs!string;
-	struct Tag {
-		string str;
-		alias str this;
-	}
-	auto addConstructorMapping_(alias func)(Constructor constructor, Tag tag) {
-		constructor.addConstructorMapping(tag, &func);
-	}
-	auto dumpStr(Node data) {
-		import dyaml.stream;
-		auto stream = new YMemoryStream();
-		auto node = Node([1, 2, 3, 4, 5]);
-		Dumper(stream).dump(node);
-		return cast(string)stream.data;
-	}
-	auto loadFromFile(string file) {
-		return Loader(file);
-	}
-	auto loadFromString(string str) {
-		return Loader.fromString(str.dup);
-	}
-} else version(Have_wyaml) {
-	import wyaml;
-	auto readAs(T)(Node node) {
-		return cast(T)node;
-	}
-	auto asString(Node node) {
-		return node.toString;
-	}
-	auto addConstructorMapping_(alias func)(Constructor constructor, Tag tag) {
-		constructor.addConstructorMapping!func(tag);
-	}
-	auto dumpStr(Node data) {
-		auto buf = new OutBuffer();
-		auto dumper = Dumper();
-		dumper.dump(buf, data);
-		return buf.text;
-	}
-	auto loadFromFile(string file) {
-		return Loader(cast(string)file.read());
-	}
-	auto loadFromString(string str) {
-		return Loader(str.dup);
-	}
+import dyaml;
+auto readAs(T)(Node node) {
+	return node.as!T;
+}
+alias asString = readAs!string;
+struct Tag {
+	string str;
+	alias str this;
+}
+auto addConstructorMapping_(alias func)(Constructor constructor, Tag tag) {
+	constructor.addConstructorMapping(tag, &func);
+}
+auto dumpStr(Node data) {
+	import dyaml.stream;
+	auto stream = new YMemoryStream();
+	auto node = Node([1, 2, 3, 4, 5]);
+	Dumper(stream).dump(node);
+	return cast(string)stream.data;
+}
+auto loadFromFile(string file) {
+	return Loader(file);
+}
+auto loadFromString(string str) {
+	return Loader.fromString(str.dup);
 }
 import libdmathexpr.mathexpr;
 
