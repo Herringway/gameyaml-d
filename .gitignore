@@ -6,3 +6,4 @@ __dummy.html
 *.exe
 *.lib
 dub.selections.json
+*.lst
