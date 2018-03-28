@@ -1,0 +1,12 @@
+---
+One:
+  Description: ""
+  Type: assembly
+  Labels:
+    - Offset: 1
+      Name: Test
+    - Offset: 2
+      Name: Test2
+  Offset: 0
+  Size: 3
+...

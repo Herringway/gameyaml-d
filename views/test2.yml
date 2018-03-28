@@ -1,0 +1,30 @@
+---
+One:
+  Description: ""
+  Type: array
+  Labels:
+    - Offset: 1
+      Name: Test
+    - Offset: 2
+      Name: Test2
+  Offset: 0
+  Item Type:
+    Type: int
+    Signed: true
+    Size: 1
+  Size: 4
+Two:
+  Description: ""
+  Type: assembly
+  Arguments:
+    A: Something
+    X: Something else
+  Offset: 4
+  Size: 2
+Three:
+  Type: script
+  Description: ""
+  Charset: ascii
+  Size: 10
+  Offset: 6
+...

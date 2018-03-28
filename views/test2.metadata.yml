@@ -1,0 +1,20 @@
+---
+Platform: test
+Title: Test
+Country: None
+SHA256: '0000000000000000000000000000000000000000000000000000000000000000'
+Version: "0.0"
+Script Tables:
+  Test:
+    - Sequence: [0xFD]
+      Replacement: ''
+    - Sequence: [0xF1]
+    - Sequence: [0xF2, "XX"]
+    - Sequence: [0xFC, "XX"]
+    - Sequence: [0xFF, 0x04, "XX"]
+    - Sequence: [0xFF, 0x05, "XX"]
+    - Sequence: [0xFF, 0x07]
+    - Sequence: [0xFF, 0x09]
+    - Sequence: [0xFF, 0x0A]
+    - Sequence: [0xFF, 0x0B, "XX"]
+...

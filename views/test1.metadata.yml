@@ -1,0 +1,14 @@
+---
+Platform: test
+Title: Test
+Country: None
+SHA256: '0000000000000000000000000000000000000000000000000000000000000000'
+Version: "0.0"
+Script Tables:
+  Test:
+    - Sequence: [0x00]
+      Replacement: "Yes"
+    - Sequence: [0x01, 0x12]
+      Replacement: "No"
+    - Sequence: [0x01, "XX"]
+...

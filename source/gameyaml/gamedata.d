@@ -23,17 +23,8 @@ import std.uni;
 import std.variant;
 
 import dyaml;
-auto readAs(T)(Node node) {
-	return node.as!T;
-}
-alias asString = readAs!string;
-struct Tag {
-	string str;
-	alias str this;
-}
-auto addConstructorMapping_(alias func)(Constructor constructor, Tag tag) {
-	constructor.addConstructorMapping(tag, &func);
-}
+import libdmathexpr.mathexpr;
+
 auto dumpStr(Node data) {
 	import dyaml.stream;
 	auto stream = new YMemoryStream();
@@ -41,13 +32,6 @@ auto dumpStr(Node data) {
 	Dumper(stream).dump(node);
 	return cast(string)stream.data;
 }
-auto loadFromFile(string file) {
-	return Loader(file);
-}
-auto loadFromString(string str) {
-	return Loader.fromString(str.dup);
-}
-import libdmathexpr.mathexpr;
 
 /++
 + Struct representing all information in a game.yml file.
@@ -62,6 +46,8 @@ struct GameData {
 	}
 	///Processor information
 	CPUDetails processor;
+	///Platform
+	string platform;
 	///Script table definitions
 	ScriptTable[string] scriptTables;
 	///Title of the game
@@ -72,8 +58,10 @@ struct GameData {
 	string defaultScript;
 	///SHA-1 hash of the game
 	string hash;
+	///Version of the game
+	string version_;
 	///Address definitions for the game
-	GameStruct[string] addresses;
+	GameStruct[string][ulong] addresses;
 	string toString() {
 		string[] output;
 		output ~= format("Game: %s (%s)", title, country);
@@ -81,7 +69,8 @@ struct GameData {
 		if (defaultScript != defaultScript.init) {
 			output ~= format("Default Script Format: %s", defaultScript);
 		}
-		output ~= format("%(%s, %)", addresses.keys);
+		foreach (id, addrs; addresses)
+			output ~= format("[%s] - %(%s, %)", id, addrs.keys);
 		return output.join("\n\t");
 	}
 }
@@ -90,36 +79,17 @@ struct GameData {
 + sequence<->string mapping.
 +/
 struct ScriptTable {
-	///Sequences following this one
-	ScriptTable[ubyte] subtables;
-	///String to replace a byte sequence with
-	Nullable!string stringReplacement;
-	///Number of bytes making up this sequence. May be a math expression.
-	string length = "1";
-	/++
-	+ Calculates the actual length of the byte sequence. May not be accurate
-	+ until a terminating entry is reached.
-	+/
-	int realLength(const ubyte[] vals) const {
-		real[string] vars;
-		foreach (i, value; vals) {
-			vars[format("ARG_%02d", i)] = value;
-		}
-		return parseMathExpr(length).evaluate(vars).to!int;
+	struct ScriptByte {
+		Nullable!ubyte val;
+		bool isWildcard;
 	}
-	/++
-	+ Whether or not this entry represents a terminating byte in the sequence
-	+ with the next byte given.
-	+/
-	bool terminates(const ubyte nextVal) const {
-		if (subtables.length == 0) {
-			return true;
-		}
-		if (nextVal !in subtables) {
-			return true;
-		}
-		return false;
+	struct Entry {
+		///String to replace a byte sequence with
+		Nullable!string stringReplacement;
+		///Number of bytes making up this sequence. May be a math expression.
+		ScriptByte[] sequence;
 	}
+	Entry[] entries;
 	/++
 	+ Convert a string to a byte array.
 	+ Bugs: Currently unimplemented.
@@ -132,38 +102,13 @@ struct ScriptTable {
 	+/
 	string replaceStr(const ubyte[] bytes) const {
 		string output;
-		for (int i = 0; i < bytes.length; i++) {
-			auto start = i;
-			if (bytes[i] in subtables) {
-				auto table = cast()subtables.dup[bytes[i]];
-				while (!table.terminates(bytes[i])) {
-					if (table.realLength(bytes[start..i+1]) <= i-start) {
-						break;
-					}
-					i++;
-					table = table.subtables[bytes[i]];
-				}
-				if (!table.stringReplacement.isNull) {
-					output ~= table.stringReplacement;
-				} else {
-					output ~= format("[%(%02X %)]", bytes[start..i+1]);
-				}
-			} else {
-				output ~= format("[%02X]", bytes[i]);
-			}
-		}
+		output ~= format!"%([%s]%)"(bytes);
 		return output;
 	}
 }
 unittest {
-	auto testScriptTable = ScriptTable();
-	testScriptTable.subtables[0] = ScriptTable();
-	testScriptTable.subtables[0].stringReplacement = "Hello";
-	assert(testScriptTable.replaceStr([0]).equal("Hello"));
-	assert(testScriptTable.replaceStr([0, 0]).equal("HelloHello"));
-
-	//NYI
-	//assert(testScriptTable.reverse("Hello") == [0]);
+	auto data = loadGameFromStrings(import("test1.metadata.yml"), import("test1.yml"));
+	assert(data.scriptTables["Test"].replaceStr([0]) == "Yes");
 }
 ///Types that can be stored in the game.yml address entries
 enum EntryType {
@@ -185,8 +130,6 @@ enum EntryType {
 	assembly,
 	///Nothing
 	null_,
-	///Colour data, often paired with tiles
-	color,
 	///Unknown data
 	undefined
 }
@@ -206,7 +149,7 @@ struct GameStruct {
 		} else if (type != b.type) {
 			return cast(int) (type-b.type);
 		} else if (size != b.size) {
-			return cmp(size, b.size);
+			return cast(int)(size - b.size);
 		}
 		return 0;
 	}
@@ -246,8 +189,10 @@ struct GameStruct {
 	bool isSigned;
 	///Tiles - Format to use for representing this tile. Default depends on architecture.
 	string format;
-	///Size of data. May be a math expression. May not be set if terminator is used.
-	string size;
+	///Size of data. May not be set if terminator or calculated size is used.
+	Nullable!ulong size;
+	///Size of data, represented by a math expression. Not required unless Size and Terminator are absent.
+	Nullable!string calculatedSize;
 	///Name of a data table associated with this data.
 	string references;
 	///Integers - Indicates that val & (1<<index) has a special value.
@@ -279,17 +224,8 @@ struct GameStruct {
 		}
 		return subEntries[0];
 	}
-	///Issues encountered while reading this entry. Use .problems() for subentries.
-	GameStructIssue[] entryProblems;
 	///Memory space this entry exists in. Typically only one such space exists.
 	size_t memorySpaceID;
-	///Whether or not the size of this data is known ahead of time.
-	bool sizeKnown() {
-		if (size == "") {
-			return false;
-		}
-		return true;
-	}
 	/++
 	+ The real size of this data structure, if it can be calculated.
 	+ Params:
@@ -298,29 +234,10 @@ struct GameStruct {
 	+ Returns: Size of the data structure.
 	+/
 	ulong realSize(real[string] vars = null) {
-		if (!sizeKnown) {
-			throw new BadSizeException();
+		if (size.isNull) {
+			return parseMathExpr(calculatedSize).evaluate(vars).to!ulong();
 		}
-		try {
-			return parseMathExpr(size).evaluate(vars).to!ulong();
-		} catch (Exception) {
-			throw new BadSizeException(size);
-		}
-	}
-	///Problems in entry detected while parsing the .yml file.
-	GameStructIssue[] problems() {
-		GameStructIssue[] recurseSubEntries(GameStruct entry) {
-			GameStructIssue[] issues;
-			foreach (subentry; entry.subEntries) {
-				issues ~= recurseSubEntries(subentry);
-			}
-			if (!entry.type == EntryType.array) {
-				issues ~= recurseSubEntries(entry.itemType);
-			}
-			issues ~= entry.entryProblems;
-			return issues;
-		}
-		return recurseSubEntries(this);
+		return size;
 	}
 	///Short string representation of this entry.
 	string toString() const {
@@ -328,237 +245,122 @@ struct GameStruct {
 	}
 }
 /++
-+ GameStruct issue severity level.
-+/
-enum IssueLevel {
-	///Issue is severe. Cannot correctly parse this entry.
-	severe,
-	///Indicates entry is incomplete. Non-fatal.
-	incomplete
-}
-/++
-+ Information on GameStruct issues. Includes reason, potential fixes,
-+ and severity level.
-+/
-struct GameStructIssue {
-	///Information on the problem encountered.
-	string reason;
-	///Potential fixes to be implemented.
-	string fix;
-	///Severity level.
-	IssueLevel level;
-	string toString() const {
-		return reason ~ " (" ~ fix ~ ")";
-	}
-}
-alias constructAssemblyBlock = constructBlock!(EntryType.assembly);
-alias constructEmptyBlock = constructBlock!(EntryType.null_);
-alias constructStructBlock = constructBlock!(EntryType.struct_);
-alias constructIntBlock = constructBlock!(EntryType.integer);
-alias constructScriptBlock = constructBlock!(EntryType.script);
-alias constructPointerBlock = constructBlock!(EntryType.pointer);
-alias constructArrayBlock = constructBlock!(EntryType.array);
-alias constructBitfieldBlock = constructBlock!(EntryType.bitField);
-alias constructUnknownBlock = constructBlock!(EntryType.undefined);
-alias constructTileBlock = constructBlock!(EntryType.tile);
-alias constructColorBlock = constructBlock!(EntryType.color);
-alias constructDataBlock = constructBlock!(EntryType.undefined);
-
-
-///Game.yml 1.0 types. Obsoleted by 2.0's tags.
-private enum YAML10Types {
-	int_ = "int",
-	hexint = "hexint",
-	script = "script",
-	pointer = "pointer",
-	bytearray = "bytearray",
-	struct_ = "struct",
-	table = "table",
-	bitstruct = "bitstruct",
-	bitfield = "bitfield",
-	palette = "palette",
-	tile = "tile",
-	empty = "empty",
-	nullspace = "nullspace",
-	data = "data",
-	assembly = "assembly"
-}
-
-/++
-+ Parses a game.yml v1.0 entry. This is a fairly awkward translation and should
-+ not be relied on for automatic upgrading.
-+/
-private GameStruct constructOldBlock(ref Node node) {
-	GameStruct block;
-	if ("Type" in node) {
-		final switch (node["Type"].readAs!YAML10Types) {
-			case YAML10Types.int_ ,YAML10Types.hexint:
-				block = constructIntBlock(node);
-				break;
-			case YAML10Types.script:
-				block = constructScriptBlock(node);
-				break;
-			case YAML10Types.pointer:
-				block = constructPointerBlock(node);
-				break;
-			case YAML10Types.bytearray:
-				block = constructArrayBlock(node);
-				block.itemType = GameStruct();
-				break;
-			case YAML10Types.struct_, YAML10Types.table, YAML10Types.bitstruct:
-				block = constructStructBlock(node);
-				break;
-			case YAML10Types.bitfield:
-				block = constructBitfieldBlock(node);
-				break;
-			case YAML10Types.palette:
-				block = constructArrayBlock(node);
-				break;
-			case YAML10Types.tile:
-				block = constructTileBlock(node);
-				break;
-			case YAML10Types.empty, YAML10Types.nullspace:
-				block = constructEmptyBlock(node);
-				break;
-			case YAML10Types.data:
-				block = constructDataBlock(node);
-				break;
-			case YAML10Types.assembly:
-				block = constructAssemblyBlock(node);
-				break;
-		}
-		block.entryProblems ~= GameStructIssue("Old entry type used", "Switch to type tag");
-	} else {
-		block = constructIntBlock(node);
-		block.entryProblems ~= GameStructIssue("Implied int type is deprecated", "Use !int tag");
-	}
-	return block;
-}
-/++
-+ Parser encountered a deprecated key. Usually has a replacement, but this is
-+ not guaranteed to be true in the future.
-+/
-private void deprecatedKey(ref Node node, ref GameStruct structure, string key, string keyOld = "") {
-	if (keyOld == "") {
-		keyOld = key.toLower();
-	}
-	if (keyOld in node) {
-		node[key] = node[keyOld];
-		structure.entryProblems ~= GameStructIssue(keyOld~" key deprecated in favour of "~key, "rename");
-		node.removeAt(keyOld);
-	}
-}
-/++
 + Constructs a GameStruct from a parsed game.yml entry.
 +/
-GameStruct constructBlock(EntryType type)(ref Node node) {
+GameStruct asGameStruct(ref Node node, bool isRoot = false) {
 	auto output = GameStruct();
-	output.type = type;
-	if ("Name" in node) {
-		output.name = node["Name"].asString;
-		output.entryProblems ~= GameStructIssue("Name key found", "Use name in block key instead");
-		node.removeAt("Name");
+	switch(node["Type"].as!string) {
+		case "array":
+			output.type = EntryType.array;
+			break;
+		case "assembly":
+			output.type = EntryType.assembly;
+			break;
+		case "int":
+			output.type = EntryType.integer;
+			break;
+		case "struct":
+			output.type = EntryType.struct_;
+			break;
+		case "pointer":
+			output.type = EntryType.pointer;
+			break;
+		case "null":
+			output.type = EntryType.null_;
+			break;
+		case "bitfield":
+			output.type = EntryType.bitField;
+			break;
+		case "tile":
+			output.type = EntryType.tile;
+			break;
+		case "script":
+			output.type = EntryType.script;
+			break;
+		case "unknown":
+			output.type = EntryType.undefined;
+			break;
+		case "empty":
+			output.type = EntryType.undefined;
+			break;
+		default: throw new Exception("Invalid type: "~node["Type"].as!string);
 	}
-	deprecatedKey(node, output, "Labels");
-	deprecatedKey(node, output, "Arguments");
-	deprecatedKey(node, output, "Final State", "final processor state");
-	deprecatedKey(node, output, "Description");
-	deprecatedKey(node, output, "Size");
-	deprecatedKey(node, output, "Format", "bpp");
-	deprecatedKey(node, output, "Format", "BPP");
-	deprecatedKey(node, output, "Base");
-	deprecatedKey(node, output, "Locals", "localvars");
+	if ("Name" in node) {
+		output.name = node["Name"].as!string;
+	}
 	if ("Pretty Name" in node) {
-		output.prettyName = node["Pretty Name"].asString;
-		node.removeAt("Pretty Name");
+		output.prettyName = node["Pretty Name"].as!string;
 	}
 	if ("Arguments" in node) {
 		foreach (string arg, string val; node["Arguments"]) {
 			output.arguments[arg] = val;
 		}
-		node.removeAt("Arguments");
 	}
 	if ("Initial State" in node) {
 		foreach (string arg, string val; node["Initial State"]) {
 			output.initialState[arg] = val;
 		}
-		node.removeAt("Initial State");
 	}
 	if ("Final State" in node) {
 		foreach (string arg, string val; node["Final State"]) {
 			output.finalState[arg] = val;
 		}
-		node.removeAt("Final State");
 	}
 	if ("Return Values" in node) {
 		foreach (string arg, string val; node["Return Values"]) {
 			output.returnValues[arg] = val;
 		}
-		node.removeAt("Return Values");
 	}
 	if ("Label States" in node) {
-		foreach (string arg, Node val; node["Label States"]) {
+		string offset;
+		string[string] states;
+		foreach (Node val; node["Label States"]) {
 			foreach (string label, string value; val) {
-				output.labelStates[arg][label] = value;
+				if (label == "Offset") {
+					offset = value;
+				} else {
+					states[label] = value;
+				}
 			}
 		}
-		node.removeAt("Label States");
+		output.labelStates[offset] = states;
 	}
 	if ("Signed" in node) {
-		if ((type == EntryType.pointer) || (type == EntryType.integer)) {
-			output.isSigned = (node["Signed"].readAs!bool).ifThrown(node["Signed"].asString == "y");
-		} else {
-			output.entryProblems ~= GameStructIssue("Signed is meaningless in this context", "remove");
+		if ((output.type == EntryType.pointer) || (output.type == EntryType.integer)) {
+			output.isSigned = (node["Signed"].as!bool).ifThrown(node["Signed"].as!string == "y");
 		}
-		node.removeAt("Signed");
 	}
 	if ("References" in node) {
-		output.references = node["References"].asString;
-		node.removeAt("References");
+		output.references = node["References"].as!string;
 	}
 	if ("Base" in node) {
-		if (type == EntryType.pointer) {
-			output.pointerBase = node["Base"].readAs!ulong;
-		} else if (type == EntryType.integer) {
-			output.numberBase = node["Base"].readAs!ubyte;
-		} else {
-			output.entryProblems ~= GameStructIssue("Base is meaningless in this context", "remove");
+		if (output.type == EntryType.pointer) {
+			output.pointerBase = node["Base"].as!ulong;
+		} else if (output.type == EntryType.integer) {
+			output.numberBase = node["Base"].as!ubyte;
 		}
-		node.removeAt("Base");
 	}
-	if ("Type" in node) {
-		node.removeAt("Type");
-	}
+	enforce(!isRoot || ("Offset" in node), "Required offset key missing");
 	if ("Offset" in node) {
-		output.address = node["Offset"].readAs!ulong;
-		node.removeAt("Offset");
+		output.address = node["Offset"].as!ulong;
 	}
 	if ("Size" in node) {
-		output.size = node["Size"].readAs!(typeof(output.size));
-		node.removeAt("Size");
-	}
-	if ((type == EntryType.pointer) && (output.realSize > 8)) {
-		output.entryProblems ~= GameStructIssue("Pointer size impossible", "change");
+		output.size = node["Size"].as!ulong;
 	}
 	if ("Description" in node) {
-		output.description = node["Description"].asString;
-		node.removeAt("Description");
+		output.description = node["Description"].as!string;
 	}
 	if ("Format" in node) {
-		output.format = node["Format"].asString;
-		node.removeAt("Format");
+		output.format = node["Format"].as!string;
 	}
 	if ("Notes" in node) {
-		output.notes = node["Notes"].asString;
-		node.removeAt("Notes");
+		output.notes = node["Notes"].as!string;
 	}
 	if ("Charset" in node) {
-		output.charSet = node["Charset"].asString;
-		node.removeAt("Charset");
+		output.charSet = node["Charset"].as!string;
 	}
 	if ("Endianness" in node) {
-		output.endianness = node["Endianness"].asString == "Little" ? Endian.littleEndian : Endian.bigEndian;
-		node.removeAt("Endianness");
+		output.endianness = node["Endianness"].as!string == "Little" ? Endian.littleEndian : Endian.bigEndian;
 	}
 	if ("Terminator" in node) {
 		if (node["Terminator"].isSequence()) {
@@ -566,87 +368,53 @@ GameStruct constructBlock(EntryType type)(ref Node node) {
 				output.terminator ~= value;
 			}
 		} else {
-			output.terminator = [node["Terminator"].readAs!ubyte];
+			output.terminator = [node["Terminator"].as!ubyte];
 		}
-		node.removeAt("Terminator");
 	}
 
 	if ("Labels" in node) {
-		foreach (ulong offset, string label; node["Labels"]) {
-			if (offset > output.realSize) {
-				output.entryProblems ~= GameStructIssue("Label offset greater than size of block", "Remove label");
-			}
-			if ((type != EntryType.array) && (type != EntryType.assembly)) {
-				output.entryProblems ~= GameStructIssue("Labels found in unlabelable block", "Remove labels");
-			}
-			output.labels[offset] = label;
+		enforce(node["Labels"].isSequence, "Labels must be a sequence");
+		foreach (Node label; node["Labels"]) {
+			output.labels[label["Offset"].as!ulong] = label["Name"].as!string;
 		}
-		node.removeAt("Labels");
 	}
 
 	if ("Entries" in node) {
-		if (type == EntryType.struct_) {
+		if (output.type == EntryType.struct_) {
 			try {
 				foreach (string name, Node subnode; node["Entries"]) {
-					GameStruct gamestruct = (readAs!GameStruct(subnode)).ifThrown(constructOldBlock(subnode));
+					GameStruct gamestruct = subnode.asGameStruct;
 					gamestruct.name = name;
 					output.subEntries ~= gamestruct;
 				}
 			} catch (YAMLException) {
 				foreach (Node subnode; node["Entries"]) {
-					GameStruct gamestruct = (readAs!GameStruct(subnode)).ifThrown(constructOldBlock(subnode));
+					GameStruct gamestruct = subnode.asGameStruct;
 					output.subEntries ~= gamestruct;
 				}
 			}
-			foreach (ref gameStruct; output.subEntries) {
-				if (!gameStruct.address.isNull()) {
-					gameStruct.entryProblems ~= GameStructIssue("Subentry contains offset", "remove");
-				}
-				if (gameStruct.subEntries.canFind!"a.name == b"(gameStruct.name)) {
-					gameStruct.entryProblems ~= GameStructIssue("Duplicate entry found", "Rename entry");
-				}
-				if (gameStruct.name.toUpper() != gameStruct.name) {
-					gameStruct.entryProblems ~= GameStructIssue("Name isn't uppercase", "rename, use Pretty Name instead");
-				}
-			}
-		} else {
-			output.entryProblems ~= GameStructIssue("Entries key found in type that isn't struct", "remove");
 		}
-		node.removeAt("Entries");
 	}
 
 	if ("Item Type" in node) {
-		if (type == EntryType.array) {
-			output.itemType = (node["Item Type"].readAs!GameStruct).ifThrown(constructOldBlock(node["Item Type"]));
-			if (!output.itemType.address.isNull()) {
-				output.entryProblems ~= GameStructIssue("Array prototype contains offset", "remove");
-			}
-		} else {
-			output.entryProblems ~= GameStructIssue("Item type key found in type that isn't array", "remove");
+		if (output.type == EntryType.array) {
+			output.itemType = node["Item Type"].asGameStruct;
 		}
-		node.removeAt("Item Type");
 	}
 	if ("Bit Values" in node) {
-		if ((type != EntryType.integer) && (type != EntryType.bitField)) {
-			output.entryProblems ~= GameStructIssue("Bit Values in non-integer type", "remove");
-		}
 		foreach (string bv; node["Bit Values"]) {
 			output.bitValues ~= bv;
 		}
-		node.removeAt("Bit Values");
 	}
 	if ("Locals" in node) {
-		if (type == EntryType.assembly) {
-			foreach (ulong offset, string label; node["Locals"]) {
-				output.localVariables[offset] = label;
+		if (output.type == EntryType.assembly) {
+			foreach (Node local; node["Locals"]) {
+				output.localVariables[local["Offset"].as!ulong] = local["Name"].as!string;
 			}
-		} else {
-			output.entryProblems ~= GameStructIssue("Local variables key found in type that isn't assembly", "remove");
 		}
-		node.removeAt("Locals");
 	}
 	if ("Values" in node) {
-		if (type == EntryType.integer) {
+		if (output.type == EntryType.integer) {
 			if (node["Values"].isMapping()) {
 				foreach (ulong val, string label; node["Values"]) {
 					output.values[val] = label;
@@ -656,155 +424,114 @@ GameStruct constructBlock(EntryType type)(ref Node node) {
 				foreach (string label; node["Values"]) {
 					output.values[i++] = label;
 				}
-			} else {
-				output.entryProblems ~= GameStructIssue("Invalid format for values key", "change to sequence of strings or map of integers:strings");
 			}
-		} else {
-			output.entryProblems ~= GameStructIssue("Values key found in type that isn't integer", "remove");
 		}
-		node.removeAt("Values");
-	}
-	foreach (string k, Node v; node) {
-		output.entryProblems ~= GameStructIssue("Unknown key: "~k, "remove");
 	}
 	return output;
 }
 /++
 + Loads a game.yml file.
 + Params:
-+ path = Absolute or relative path to game.yml file.
++ path = Absolute or relative path to game definition folder.
 +/
-GameData loadGameFile(string path) {
-	return loadCommon(loadFromFile(path));
+GameData loadGameFiles(string path) {
+	import std.file : dirEntries, SpanMode;
+	import std.path : baseName;
+	Loader[] docs;
+	foreach (foundDoc; dirEntries(path, "*.yml", SpanMode.shallow)) {
+		if (baseName(foundDoc) != "metadata.yml") {
+			docs ~= Loader(foundDoc);
+		}
+	}
+	return loadCommon(Loader(path~"/metadata.yml"), docs);
+}
+///
+@system unittest {
+	import std.file : exists, mkdirRecurse, rmdirRecurse, tempDir;
+	auto testLocation = tempDir~"/filetest/";
+	mkdir(testLocation);
+	scope(exit) rmdirRecurse(testLocation);
+	toFile(import("test1.yml"), testLocation~"/game.yml");
+	toFile(import("test1.metadata.yml"), testLocation~"/metadata.yml");
+	auto data = loadGameFiles(testLocation);
+	assert("One" in data.addresses[0]);
+	assert(data.title == "Test");
 }
 /++
 + Loads game.yml data from a pre-existing string.
 + Params:
 + data = Game.yml data.
 +/
-GameData loadGameFromString(string data) {
-	return loadCommon(loadFromString(data));
+GameData loadGameFromStrings(string metadata, string[] definitions...) {
+	Loader[] docs;
+	foreach (definition; definitions) {
+		docs ~= Loader.fromString(definition.dup);
+	}
+	return loadCommon(Loader.fromString(metadata.dup), docs);
 }
 /++
 + Common code for loading game.yml data.
 +/
-private GameData loadCommon(Loader loader) {
-	ScriptTable[ubyte] buildScriptTables(Node input) {
-		ScriptTable[ubyte] output;
-		ScriptTable recurseSubEntriesLength(Node val) {
-			auto output = ScriptTable();
-			if (val.isScalar()) {
-				output.length = val.asString;
-			} else {
-				foreach (Node key, Node value; val) {
-					if ((key == "default") || (key == "=")) {
-						output.length = value.asString;
-					} else {
-						output.subtables[key.readAs!ubyte] = recurseSubEntriesLength(value);
-					}
-				}
-			}
-			return output;
-		}
-		void recurseSubEntriesReplacements(Node val, ref ScriptTable[ubyte] output) {
-			foreach (Node key, Node value; val) {
-				if (value.isScalar()) {
-					if (key.readAs!ubyte !in output) {
-						output[key.readAs!ubyte] = ScriptTable();
-					}
-					output[key.readAs!ubyte].stringReplacement = value.asString;
-				}
-			}
-		}
-		if ("Lengths" in input) {
-			foreach (Node key, Node value; input["Lengths"]) {
-				if (key == "=") {
-					continue;
-				}
-				output[key.readAs!ubyte] = recurseSubEntriesLength(value);
-			}
-		}
-		if ("Replacements" in input) {
-			recurseSubEntriesReplacements(input["Replacements"], output);
-		}
-		return output;
-	}
-	auto constructor = new Constructor;
-	constructor.addConstructorMapping_!constructAssemblyBlock(Tag("!assembly"));
-	constructor.addConstructorMapping_!constructDataBlock(Tag("!data"));
-	constructor.addConstructorMapping_!constructEmptyBlock(Tag("!empty"));
-	constructor.addConstructorMapping_!constructStructBlock(Tag("!struct"));
-	constructor.addConstructorMapping_!constructScriptBlock(Tag("!script"));
-	constructor.addConstructorMapping_!constructIntBlock(Tag("!int"));
-	constructor.addConstructorMapping_!constructArrayBlock(Tag("!array"));
-	constructor.addConstructorMapping_!constructPointerBlock(Tag("!pointer"));
-	constructor.addConstructorMapping_!constructBitfieldBlock(Tag("!bitfield"));
-	constructor.addConstructorMapping_!constructUnknownBlock(Tag("!unknown"));
-	constructor.addConstructorMapping_!constructUnknownBlock(Tag("!undefined"));
-	constructor.addConstructorMapping_!constructTileBlock(Tag("!tile"));
-	constructor.addConstructorMapping_!constructColorBlock(Tag("!color"));
-	loader.constructor = constructor;
-	auto document = loader.loadAll();
+private GameData loadCommon(Loader metadataLoader, Loader[] definitionLoaders...) {
 	GameData output;
-	enforce(document.length >= 1, "No YAML documents found");
-	enforce(document[0].isValid, "Invalid YAML found in document 0");
-	enforce(document.length >= 2, "Missing game metadata or offset documentation");
-	enforce(document[1].isValid, "Invalid YAML found in document 1");
-	enforce(document[0].isMapping, "Invalid format for game metadata");
-	enforce("Title" in document[0], "Missing title!");
-	output.title = document[0]["Title"].asString;
-	enforce("Country" in document[0], "Missing Country!");
-	output.country = document[0]["Country"].asString;
-	if ("Clean Hash" in document[0]) {
-		output.hash = document[0]["Clean Hash"].asString;
-		enforce(output.hash.length == 40, "Specified hash is not SHA1");
-	}
-	if ("Default Script" in document[0]) {
-		output.defaultScript = document[0]["Default Script"].asString;
-	}
-	if (document[1].isMapping) {
-		ulong lastOffset = 0;
-		ulong lastSize = 0;
-		string lastName;
-		foreach (string name, Node node; document[1]) {
-			try {
-				GameStruct gamestruct = (readAs!GameStruct(node)).ifThrown(constructOldBlock(node));
-				gamestruct.name = name;
-				if (!gamestruct.address.isNull) {
-					if (gamestruct.address < lastOffset) {
-						gamestruct.entryProblems ~= GameStructIssue(lastName~" has greater offset", "move entry");
+	{
+		auto document = metadataLoader.load();
+		enforce(document.isValid, "Invalid YAML found in document 0");
+		enforce(document.isMapping, "Invalid format for game metadata");
+		enforce("Title" in document, "Missing title!");
+		enforce("Country" in document, "Missing Country!");
+		enforce("Version" in document, "Missing Version!");
+		enforce("Version" in document, "Missing Platform!");
+		enforce("SHA256" in document, "Missing Hash!");
+		output.title = document["Title"].as!string;
+		output.platform = document["Platform"].as!string;
+		output.country = document["Country"].as!string;
+		output.version_ = document["Version"].as!string;
+		output.hash = document["SHA256"].as!string;
+		if ("Default Script" in document) {
+			output.defaultScript = document["Default Script"].as!string;
+		}
+		if ("Script Tables" in document) {
+			foreach (string tableName, Node table; document["Script Tables"]) {
+				output.scriptTables[tableName] = ScriptTable();
+				foreach (Node tableEntry; table) {
+					auto entry = ScriptTable.Entry();
+					if ("Replacement" in tableEntry) {
+						entry.stringReplacement = tableEntry["Replacement"].as!string;
 					}
-					if (gamestruct.address < lastOffset+lastSize) {
-						gamestruct.entryProblems ~= GameStructIssue("Overlap with "~lastName, "fix previous entry size");
+					foreach (Node seqByte; tableEntry["Sequence"]) {
+						if (seqByte.as!string == "XX") {
+							entry.sequence ~= ScriptTable.ScriptByte(Nullable!ubyte.init, true);
+						} else {
+							entry.sequence ~= ScriptTable.ScriptByte(Nullable!ubyte(seqByte.as!ubyte), false);
+						}
 					}
-					lastOffset = gamestruct.address;
+					output.scriptTables[tableName].entries ~= entry;
 				}
-				try {
-					lastSize = gamestruct.realSize;
-				} catch (Exception) {
-					gamestruct.entryProblems ~= GameStructIssue("Invalid size", "Fix size");
-				}
-				lastName = name;
-				if (name.toUpper() != name) {
-					gamestruct.entryProblems ~= GameStructIssue("Name isn't uppercase", "rename, use Pretty Name instead");
-				}
-				if (gamestruct.size == "") {
-					gamestruct.entryProblems ~= GameStructIssue("Missing size in root entry", "add size");
-				}
-				if (name in output.addresses) {
-					gamestruct.entryProblems ~= GameStructIssue("Duplicate entry with this name exists", "rename or remove");
-				}
-				output.addresses[name] = gamestruct;
-			} catch (Exception e) {
-				e.msg = "Error in " ~ name ~ ": " ~ e.msg;
-				throw e;
 			}
 		}
 	}
-	if ("Script Tables" in document[0]) {
-		foreach (string tablename, Node table; document[0]["Script Tables"]) {
-			output.scriptTables[tablename] = ScriptTable();
-			output.scriptTables[tablename].subtables = buildScriptTables(table);
+	foreach (memSpaceID, definitionDoc; definitionLoaders) {
+		auto document = definitionDoc.load();
+		if (document.isMapping) {
+			ulong lastOffset = 0;
+			ulong lastSize = 0;
+			string lastName;
+			foreach (string name, Node node; document) {
+				try {
+					GameStruct gamestruct = node.asGameStruct(true);
+					gamestruct.name = name;
+					if (!gamestruct.address.isNull) {
+						lastOffset = gamestruct.address;
+					}
+					lastSize = gamestruct.realSize;
+					lastName = name;
+					output.addresses[memSpaceID][name] = gamestruct;
+				} catch (Exception e) {
+					e.msg = "Error in " ~ name ~ ": " ~ e.msg;
+					throw e;
+				}
+			}
 		}
 	}
 	return output;
@@ -863,6 +590,7 @@ struct YAMLType(T) if (isProperSource!T) {
 			case EntryType.integer, EntryType.pointer, EntryType.bitField:
 				BigInt tmp;
 				foreach (position; 0..info.realSize) {
+					enforce(!(*source).empty, "Error while reading "~info.name);
 					tmp += ((*source).read!ubyte)<<(8*position);
 					bytesRead++;
 				}
@@ -889,10 +617,57 @@ struct YAMLType(T) if (isProperSource!T) {
 			case EntryType.tile:
 				value = (*source).take(cast(size_t) info.realSize).array;
 				break;
-			case EntryType.color:
-				value = (*source).take(cast(size_t) info.realSize).array;
+		}
+	}
+	import std.json;
+	JSONValue toJSON() {
+		JSONValue output;
+		final switch(info.type) {
+			case EntryType.struct_:
+				foreach (key, val; value.get!(YAMLType[string])) {
+					output[key] = val.toJSON();
+				}
+				break;
+			case EntryType.integer:
+				auto value = value.get!BigInt.toLong();
+				if (value in info.values) {
+					output = JSONValue(info.values[value]);
+				} else if (info.bitValues.length > 0) {
+					JSONValue[] nodes;
+					foreach (i, valueName; info.bitValues) {
+						if (value & (1<<i)) {
+							nodes ~= JSONValue(valueName);
+						}
+					}
+					output = JSONValue(nodes);
+				} else {
+					output = JSONValue(value);
+				}
+				break;
+			case EntryType.pointer, EntryType.bitField:
+				output = JSONValue(value.get!BigInt.toLong());
+				break;
+			case EntryType.script:
+				output = JSONValue(this.toString());
+				break;
+			case EntryType.array:
+				JSONValue[] arr;
+				foreach (val; value.get!(YAMLType[])) {
+					arr ~= val.toJSON();
+				}
+				output = JSONValue(arr);
+				break;
+			case EntryType.undefined, EntryType.null_:
+				output = JSONValue(value.get!(ubyte[]));
+				break;
+			case EntryType.tile:
+				output = JSONValue(value.get!(uint[]));
+				break;
+			case EntryType.assembly:
+				output = JSONValue(value.get!(ubyte[]));
 				break;
 		}
+		return output;
 	}
 	Node toYAML() {
 		auto output = Node(YAMLNull());
@@ -929,9 +704,6 @@ struct YAMLType(T) if (isProperSource!T) {
 			case EntryType.tile:
 				output = Node(value.get!(uint[][]).map!((x) => Node(x.map!((x) => Node(x)).array)).array);
 				break;
-			case EntryType.color:
-				output = Node(value.get!uint);
-				break;
 			case EntryType.assembly:
 				output = Node(value.get!(ubyte[]).map!((x) => Node(x)).array);
 				break;
@@ -965,9 +737,6 @@ struct YAMLType(T) if (isProperSource!T) {
 				output = value.get!(ubyte[]);
 				break;
 			case EntryType.tile:
-				output = value.get!(ubyte[]);
-				break;
-			case EntryType.color:
 				output = value.get!(ubyte[]);
 				break;
 			case EntryType.assembly:
@@ -1032,7 +801,7 @@ struct YAMLType(T) if (isProperSource!T) {
 				} else {
 					assert(0, "Unsupported character encoding");
 				}
-			case EntryType.struct_, EntryType.pointer, EntryType.bitField, EntryType.array, EntryType.tile, EntryType.undefined, EntryType.null_, EntryType.color, EntryType.assembly:
+			case EntryType.struct_, EntryType.pointer, EntryType.bitField, EntryType.array, EntryType.tile, EntryType.undefined, EntryType.null_, EntryType.assembly:
 				assert(0);
 			case EntryType.integer:
 				return value.get!BigInt.text;
@@ -1044,27 +813,31 @@ unittest {
 	{
 		ubyte[] testdata = [0, 1, 2, 3];
 		auto info_int = GameStruct();
-		info_int.size = "4";
+		info_int.size = 4;
 		info_int.type = EntryType.integer;
 		info_int.address = 0;
 		auto t = readYAMLType(testdata, info_int, gd);
 		assert(t == 0x03020100);
 		assert(t.toBytes() == [0, 1, 2, 3]);
+		assert(t.toYAML().as!int == 0x03020100);
+		assert(t.toJSON().integer == 0x03020100);
 	}
 	{
 		ubyte[] testdata = [0, 1, 2, 3];
 		auto info_int = GameStruct();
-		info_int.size = "3";
+		info_int.size = 3;
 		info_int.type = EntryType.integer;
 		info_int.address = 0;
 		auto t = readYAMLType(testdata, info_int, gd);
 		assert(t == 0x020100);
 		assert(t.toBytes() == [0, 1, 2]);
+		assert(t.toYAML().as!int == 0x020100);
+		assert(t.toJSON().integer == 0x020100);
 	}
 	{
 		ubyte[] testdata = ['T', 'e', 's', 't'];
 		auto infoStr = GameStruct();
-		infoStr.size = "4";
+		infoStr.size = 4;
 		infoStr.type = EntryType.script;
 		infoStr.address = 0;
 		infoStr.charSet = "ASCII";
@@ -1073,11 +846,13 @@ unittest {
 		assertThrown(t == 4);
 		assert(t.toBytes() == "Test");
 		assert(t == "Test");
+		assert(t.toYAML().as!string == "Test");
+		assert(t.toJSON().str == "Test");
 	}
 	{
 		ubyte[] testdata = ['T', 'e', 's', 't'];
 		auto infoStr = GameStruct();
-		infoStr.size = "4";
+		infoStr.size = 4;
 		infoStr.type = EntryType.script;
 		infoStr.address = 0;
 		infoStr.charSet = "UTF-8";
@@ -1089,30 +864,34 @@ unittest {
 	{
 		ubyte[] testdata = [0, 1, 2, 3];
 		auto infoArray = GameStruct();
-		infoArray.size = "4";
+		infoArray.size = 4;
 		infoArray.type = EntryType.array;
 		infoArray.address = 0;
 		infoArray.itemType = GameStruct();
-		infoArray.itemType.size = "2";
+		infoArray.itemType.size = 2;
 		infoArray.itemType.type = EntryType.integer;
 		auto t = readYAMLType(testdata, infoArray, gd);
 		assert(t == [0x0100, 0x0302]);
 		assertThrown(t == "Test");
 		assertThrown(t == 0x03020100);
 		assert(t.toBytes() == [0, 1, 2, 3]);
+		assert(t.toYAML()[0].as!int == 0x0100);
+		assert(t.toYAML()[1].as!int == 0x0302);
+		assert(t.toJSON()[0].integer == 0x0100);
+		assert(t.toJSON()[1].integer == 0x0302);
 	}
 	{
 		ubyte[] testdata = [0, 1, 2, 3];
 		auto info_struct = GameStruct();
-		info_struct.size = "4";
+		info_struct.size = 4;
 		info_struct.type = EntryType.struct_;
 		GameStruct miniInt = GameStruct();
-		miniInt.size = "2";
+		miniInt.size = 2;
 		miniInt.type = EntryType.integer;
 		miniInt.name = "A";
 		auto miniInt2 = GameStruct();
 		miniInt2.name = "B";
-		miniInt2.size = "2";
+		miniInt2.size = 2;
 		miniInt2.type = EntryType.integer;
 		info_struct.subEntries = [miniInt, miniInt2];
 		info_struct.address = 0;
@@ -1120,24 +899,10 @@ unittest {
 		assert(t["A"] == 0x0100);
 		assert(t["B"] == 0x0302);
 		assert(t == ["A": 0x0100, "B": 0x0302]);
-	}
-}
-/++
-+ Translates an EntryType to its associated YAML tag.
-+/
-string tag(EntryType type) {
-	final switch (type) {
-		case EntryType.integer: return "!int";
-		case EntryType.null_: return "!empty";
-		case EntryType.struct_: return "!struct";
-		case EntryType.script: return "!script";
-		case EntryType.assembly: return "!assembly";
-		case EntryType.array: return "!array";
-		case EntryType.undefined: return "!undefined";
-		case EntryType.pointer: return "!pointer";
-		case EntryType.bitField: return "!bitfield";
-		case EntryType.tile: return "!tile";
-		case EntryType.color: return "!color";
+		assert(t.toYAML()["A"].as!int == 0x0100);
+		assert(t.toYAML()["B"].as!int == 0x0302);
+		assert(t.toJSON()["A"].integer == 0x0100);
+		assert(t.toJSON()["B"].integer == 0x0302);
 	}
 }
 /++
@@ -1161,8 +926,8 @@ Node[string] toYAML(GameStruct[] data...) {
 			}
 			ydata["Entries"] = Node(nodes);
 		}
-		ydata["Size"] = Node(datum.size);
-		output[datum.name] = Node(ydata, datum.type.tag);
+		ydata["Size"] = Node(datum.size.get);
+		output[datum.name] = Node(ydata);
 	}
 	return output;
 }
@@ -1171,9 +936,10 @@ Node[string] toYAML(GameStruct[] data...) {
 + Params:
 + data = Game definitions to search in.
 + addr = Address to look for.
++ memSpace = Memory space to look in (usually zero)
 +/
-Nullable!(string,"") getNameFromAddr(GameData data, ulong addr) pure @safe {
-	foreach (entry; data.addresses) {
+Nullable!(string,"") getNameFromAddr(GameData data, ulong addr, ulong memSpace = 0) pure @safe {
+	foreach (entry; data.addresses[memSpace]) {
 		if (entry.address == addr) {
 			return Nullable!(string, "")(entry.name);
 		}
@@ -1181,18 +947,7 @@ Nullable!(string,"") getNameFromAddr(GameData data, ulong addr) pure @safe {
 	return Nullable!(string, "")(null);
 }
 unittest {
-	auto data = loadGameFromString(`---
-Platform: test
-Title: Test
-Country: None
-...
----
-One: !assembly
-  Labels:
-    1: Test
-    2: Test2
-  Offset: 0
-  Size: 3`);
+	auto data = loadGameFromStrings(import("test1.metadata.yml"), import("test1.yml"));
 	assert(getNameFromAddr(data, 0) == "One");
 	assert(getNameFromAddr(data, 1).isNull);
 }
@@ -1202,9 +957,10 @@ One: !assembly
 + Params:
 + data = Game definitions to search in.
 + addr = Address to generate name for.
++ memSpace = Memory space to search.
 +/
-string offsetLabel(GameData data, ulong addr) {
-	auto foundEntry = data.addresses.values.find!((x, y) => (x.address <= addr) && (x.address+x.realSize > addr))(addr);
+string offsetLabel(GameData data, ulong addr, ulong memSpace = 0) {
+	auto foundEntry = data.addresses[memSpace].values.find!((x, y) => (x.address <= addr) && (x.address+x.realSize > addr))(addr);
 	if (foundEntry.empty) {
 		return format("%X", addr);
 	} else if (foundEntry.front.type == EntryType.array) {
@@ -1220,23 +976,7 @@ string offsetLabel(GameData data, ulong addr) {
 	return format("%s+%s", foundEntry.front.name, addr - foundEntry.front.address);
 }
 unittest {
-	auto data = loadGameFromString(`---
-Platform: test
-Title: Test
-Country: None
-...
----
-One: !array
-  Labels:
-    1: Test
-    2: Test2
-  Offset: 0
-  Item Type: !int
-    Size: 1
-  Size: 4
-Two: !assembly
-  Offset: 4
-  Size: 2`);
+	auto data = loadGameFromStrings(import("test2.metadata.yml"), import("test2.yml"));
 	assert(offsetLabel(data, 0) == "One[0]");
 	assert(offsetLabel(data, 1) == "One[Test]");
 	assert(offsetLabel(data, 2) == "One[Test2]");
