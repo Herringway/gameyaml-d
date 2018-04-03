@@ -82,12 +82,31 @@ struct ScriptTable {
 	struct ScriptByte {
 		Nullable!ubyte val;
 		bool isWildcard;
+		bool opEquals(const ubyte datum) const @safe pure nothrow @nogc {
+			if (isWildcard) {
+				return true;
+			}
+			assert(!val.isNull);
+			return val == datum;
+		}
 	}
 	struct Entry {
 		///String to replace a byte sequence with
 		Nullable!string stringReplacement;
 		///Number of bytes making up this sequence. May be a math expression.
 		ScriptByte[] sequence;
+
+		bool match(const ubyte[] bytes) const {
+			if (sequence.length < bytes.length) {
+				return false;
+			}
+			foreach (reference, datum; lockstep(sequence, bytes)) {
+				if (reference != datum) {
+					return false;
+				}
+			}
+			return true;
+		}
 	}
 	Entry[] entries;
 	/++
@@ -102,7 +121,26 @@ struct ScriptTable {
 	+/
 	string replaceStr(const ubyte[] bytes) const {
 		string output;
-		output ~= format!"%([%s]%)"(bytes);
+		ubyte[] remaining = bytes.dup;
+		bool matched;
+		while (!remaining.empty) {
+			matched = false;
+			foreach (entry; entries.filter!(x => x.sequence.length <= remaining.length)) {
+				if (entry.match(remaining[0..entry.sequence.length])) {
+					if (entry.stringReplacement.isNull) {
+						output ~= format!"%([%s]%)"(remaining[0..entry.sequence.length]);
+					} else {
+						output ~= entry.stringReplacement;
+					}
+					remaining = remaining[entry.sequence.length..$];
+					matched = true;
+				}
+			}
+			if (!matched) {
+				output ~= format!"%([%s]%)"(remaining[0..1]);
+				remaining = remaining[1..$];
+			}
+		}
 		return output;
 	}
 }
