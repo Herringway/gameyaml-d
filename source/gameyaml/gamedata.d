@@ -26,11 +26,10 @@ import dyaml;
 import libdmathexpr.mathexpr;
 
 auto dumpStr(Node data) {
-	import dyaml.stream;
-	auto stream = new YMemoryStream();
+	Appender!string stream;
 	auto node = Node([1, 2, 3, 4, 5]);
-	Dumper(stream).dump(node);
-	return cast(string)stream.data;
+	dumper(stream).dump(node);
+	return stream.data;
 }
 
 /++
@@ -478,10 +477,10 @@ GameData loadGameFiles(string path) {
 	Loader[] docs;
 	foreach (foundDoc; dirEntries(path, "*.yml", SpanMode.shallow)) {
 		if (baseName(foundDoc) != "metadata.yml") {
-			docs ~= Loader(foundDoc);
+			docs ~= Loader.fromFile(foundDoc);
 		}
 	}
-	return loadCommon(Loader(path~"/metadata.yml"), docs);
+	return loadCommon(Loader.fromFile(path~"/metadata.yml"), docs);
 }
 ///
 @system unittest {

@@ -10,7 +10,7 @@
 		"yamlvalidator"
 	],
 	"dependencies": {
-		"dyaml": "~>0.6.0",
-		"libdmathexpr": "~>1.0.0"
+		"dyaml": "~>0.7.0",
+		"libdmathexpr": "~>1.1.0"
 	}
 }
