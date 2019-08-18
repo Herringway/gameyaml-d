@@ -18,6 +18,7 @@ import std.range;
 import std.stdio;
 import std.string;
 import std.system;
+import std.traits;
 import std.typecons;
 import std.uni;
 import std.variant;
