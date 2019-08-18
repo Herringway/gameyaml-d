@@ -29,7 +29,7 @@ import libdmathexpr.mathexpr;
 auto dumpStr(Node data) {
 	Appender!string stream;
 	auto node = Node([1, 2, 3, 4, 5]);
-	dumper(stream).dump(node);
+	dumper().dump(stream, node);
 	return stream.data;
 }
 
@@ -401,7 +401,7 @@ GameStruct asGameStruct(ref Node node, bool isRoot = false) {
 		output.endianness = node["Endianness"].as!string == "Little" ? Endian.littleEndian : Endian.bigEndian;
 	}
 	if ("Terminator" in node) {
-		if (node["Terminator"].isSequence()) {
+		if (node["Terminator"].nodeID == NodeID.sequence) {
 			foreach (ubyte value; node["Terminator"]) {
 				output.terminator ~= value;
 			}
@@ -411,7 +411,7 @@ GameStruct asGameStruct(ref Node node, bool isRoot = false) {
 	}
 
 	if ("Labels" in node) {
-		enforce(node["Labels"].isSequence, "Labels must be a sequence");
+		enforce(node["Labels"].nodeID == NodeID.sequence, "Labels must be a sequence");
 		foreach (Node label; node["Labels"]) {
 			output.labels[label["Offset"].as!ulong] = label["Name"].as!string;
 		}
@@ -453,11 +453,11 @@ GameStruct asGameStruct(ref Node node, bool isRoot = false) {
 	}
 	if ("Values" in node) {
 		if (output.type == EntryType.integer) {
-			if (node["Values"].isMapping()) {
+			if (node["Values"].nodeID == NodeID.mapping) {
 				foreach (ulong val, string label; node["Values"]) {
 					output.values[val] = label;
 				}
-			} else if (node["Values"].isSequence()) {
+			} else if (node["Values"].nodeID == NodeID.sequence) {
 				uint i = 0;
 				foreach (string label; node["Values"]) {
 					output.values[i++] = label;
@@ -515,7 +515,7 @@ private GameData loadCommon(Loader metadataLoader, Loader[] definitionLoaders...
 	{
 		auto document = metadataLoader.load();
 		enforce(document.isValid, "Invalid YAML found in document 0");
-		enforce(document.isMapping, "Invalid format for game metadata");
+		enforce(document.nodeID == NodeID.mapping, "Invalid format for game metadata");
 		enforce("Title" in document, "Missing title!");
 		enforce("Country" in document, "Missing Country!");
 		enforce("Version" in document, "Missing Version!");
@@ -551,7 +551,7 @@ private GameData loadCommon(Loader metadataLoader, Loader[] definitionLoaders...
 	}
 	foreach (memSpaceID, definitionDoc; definitionLoaders) {
 		auto document = definitionDoc.load();
-		if (document.isMapping) {
+		if (document.nodeID == NodeID.mapping) {
 			ulong lastOffset = 0;
 			ulong lastSize = 0;
 			string lastName;
