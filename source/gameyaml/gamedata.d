@@ -130,7 +130,7 @@ struct ScriptTable {
 					if (entry.stringReplacement.isNull) {
 						output ~= format!"%([%s]%)"(remaining[0..entry.sequence.length]);
 					} else {
-						output ~= entry.stringReplacement;
+						output ~= entry.stringReplacement.get;
 					}
 					remaining = remaining[entry.sequence.length..$];
 					matched = true;
@@ -177,7 +177,7 @@ enum EntryType {
 struct GameStruct {
 	int opCmp(ref const GameStruct b) const {
 		if (address != b.address) {
-			return cast(int) (address-b.address);
+			return cast(int) (address.get-b.address.get);
 		} else if (name != b.name) {
 			return cmp(name,b.name);
 		} else if (description != b.description) {
@@ -187,7 +187,7 @@ struct GameStruct {
 		} else if (type != b.type) {
 			return cast(int) (type-b.type);
 		} else if (size != b.size) {
-			return cast(int)(size - b.size);
+			return cast(int)(size.get - b.size.get);
 		}
 		return 0;
 	}
@@ -273,9 +273,9 @@ struct GameStruct {
 	+/
 	ulong realSize(real[string] vars = null) {
 		if (size.isNull) {
-			return parseMathExpr(calculatedSize).evaluate(vars).to!ulong();
+			return parseMathExpr(calculatedSize.get).evaluate(vars).to!ulong();
 		}
-		return size;
+		return size.get;
 	}
 	///Short string representation of this entry.
 	string toString() const {
@@ -560,7 +560,7 @@ private GameData loadCommon(Loader metadataLoader, Loader[] definitionLoaders...
 					GameStruct gamestruct = node.asGameStruct(true);
 					gamestruct.name = name;
 					if (!gamestruct.address.isNull) {
-						lastOffset = gamestruct.address;
+						lastOffset = gamestruct.address.get;
 					}
 					lastSize = gamestruct.realSize;
 					lastName = name;
@@ -998,20 +998,20 @@ unittest {
 + memSpace = Memory space to search.
 +/
 string offsetLabel(GameData data, ulong addr, ulong memSpace = 0) {
-	auto foundEntry = data.addresses[memSpace].values.find!((x, y) => (x.address <= addr) && (x.address+x.realSize > addr))(addr);
+	auto foundEntry = data.addresses[memSpace].values.find!((x, y) => (x.address.get <= addr) && (x.address.get+x.realSize > addr))(addr);
 	if (foundEntry.empty) {
 		return format("%X", addr);
 	} else if (foundEntry.front.type == EntryType.array) {
-		if ((addr - foundEntry.front.address) in foundEntry.front.labels) {
-			return format("%s[%s]", foundEntry.front.name, foundEntry.front.labels[addr - foundEntry.front.address]);
+		if ((addr - foundEntry.front.address.get) in foundEntry.front.labels) {
+			return format("%s[%s]", foundEntry.front.name, foundEntry.front.labels[addr - foundEntry.front.address.get]);
 		}
-		return format("%s[%d]", foundEntry.front.name, (addr - foundEntry.front.address) / foundEntry.front.itemType.realSize);
-	} else if (foundEntry.front.address == addr) {
+		return format("%s[%d]", foundEntry.front.name, (addr - foundEntry.front.address.get) / foundEntry.front.itemType.realSize);
+	} else if (foundEntry.front.address.get == addr) {
 		return foundEntry.front.name;
-	} else if ((addr - foundEntry.front.address) in foundEntry.front.labels) {
-		return format("%s#%s", foundEntry.front.name, foundEntry.front.labels[addr - foundEntry.front.address]);
+	} else if ((addr - foundEntry.front.address.get) in foundEntry.front.labels) {
+		return format("%s#%s", foundEntry.front.name, foundEntry.front.labels[addr - foundEntry.front.address.get]);
 	}
-	return format("%s+%s", foundEntry.front.name, addr - foundEntry.front.address);
+	return format("%s+%s", foundEntry.front.name, addr - foundEntry.front.address.get);
 }
 unittest {
 	auto data = loadGameFromStrings(import("test2.metadata.yml"), import("test2.yml"));
